@@ -438,7 +438,33 @@
 </head>
 <body>
     <div class="page-wrapper">
-        {% block navbar %}{% endblock %}
+        {% block navbar %}
+        <nav class="navbar">
+            <div class="navbar-content">
+                <a href="{% if user.is_authenticated %}{% url 'hirwafab:dashboard' %}{% else %}{% url 'hirwafab:login' %}{% endif %}" class="navbar-brand">HirwaF UAS</a>
+                <div class="navbar-menu">
+                    {% if user.is_authenticated %}
+                        <span class="navbar-user">{{ user.username }}</span>
+                        {% if perms.hirwafab.view_user_directory %}
+                            <a href="{% url 'hirwafab:user_directory' %}">Users</a>
+                        {% endif %}
+                        {% if perms.hirwafab.view_all_profiles %}
+                            <a href="{% url 'hirwafab:user_directory_full' %}">Full Directory</a>
+                            <a href="{% url 'hirwafab:user_activity' %}">Activity</a>
+                            <a href="{% url 'hirwafab:reports' %}">Reports</a>
+                        {% endif %}
+                        {% if user.is_superuser %}
+                            <a href="/admin/">Admin</a>
+                        {% endif %}
+                        <a href="{% url 'hirwafab:logout' %}" style="color: #ef4444;">Logout</a>
+                    {% else %}
+                        <a href="{% url 'hirwafab:login' %}">Login</a>
+                        <a href="{% url 'hirwafab:register' %}">Register</a>
+                    {% endif %}
+                </div>
+            </div>
+        </nav>
+        {% endblock %}
         <main style="flex: 1;">
             {% block content %}{% endblock %}
         </main>

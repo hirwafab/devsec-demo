@@ -17,6 +17,16 @@ class UserProfile(models.Model):
         db_table = 'hirwafab_user_profile'
         verbose_name = 'User Profile'
         verbose_name_plural = 'User Profiles'
+        permissions = [
+            ('view_dashboard', 'Can view dashboard'),
+            ('view_own_profile', 'Can view own profile'),
+            ('change_own_profile', 'Can edit own profile'),
+            ('change_own_password', 'Can change own password'),
+            ('view_user_directory', 'Can view user directory'),
+            ('view_all_profiles', 'Can view all profiles'),
+            ('view_user_activity', 'Can view user activity'),
+            ('download_reports', 'Can download reports'),
+        ]
 
     def __str__(self):
         return f"Profile for {self.user.username}"

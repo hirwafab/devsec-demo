@@ -1,6 +1,7 @@
 from django.test import TestCase, Client
 from django.urls import reverse
-from django.contrib.auth.models import User
+from django.contrib.auth.models import User, Group, Permission
+from django.contrib.contenttypes.models import ContentType
 from .models import UserProfile
 
 
@@ -205,6 +206,7 @@ class DashboardTests(TestCase):
             email='test@example.com',
             password='TestPassword123'
         )
+        self.user.groups.add(Group.objects.get(name='students'))
 
     def test_dashboard_requires_login(self):
         """Test that dashboard requires authentication."""
@@ -239,6 +241,7 @@ class PasswordChangeTests(TestCase):
             email='test@example.com',
             password='TestPassword123'
         )
+        self.user.groups.add(Group.objects.get(name='students'))
 
     def test_change_password_requires_login(self):
         """Test that change password requires authentication."""
@@ -303,6 +306,7 @@ class ProfileTests(TestCase):
             password='TestPassword123'
         )
         self.profile = UserProfile.objects.create(user=self.user)
+        self.user.groups.add(Group.objects.get(name='students'))
 
     def test_profile_requires_login(self):
         """Test that profile page requires authentication."""
@@ -373,3 +377,150 @@ class URLConfigTests(TestCase):
         """Test change password URL name resolves."""
         url = reverse('hirwafab:change_password')
         self.assertEqual(url, '/change-password/')
+
+
+class RBACStudentTests(TestCase):
+    """Test that students can access their own pages and nothing more."""
+
+    def setUp(self):
+        self.client = Client()
+        self.student = User.objects.create_user(
+            username='student1', email='s@example.com', password='TestPass123'
+        )
+        UserProfile.objects.get_or_create(user=self.student)
+        students_group = Group.objects.get(name='students')
+        self.student.groups.add(students_group)
+
+    def test_student_can_access_dashboard(self):
+        self.client.login(username='student1', password='TestPass123')
+        response = self.client.get(reverse('hirwafab:dashboard'))
+        self.assertEqual(response.status_code, 200)
+
+    def test_student_can_access_own_profile(self):
+        self.client.login(username='student1', password='TestPass123')
+        response = self.client.get(reverse('hirwafab:profile'))
+        self.assertEqual(response.status_code, 200)
+
+    def test_student_can_access_user_directory(self):
+        self.client.login(username='student1', password='TestPass123')
+        response = self.client.get(reverse('hirwafab:user_directory'))
+        self.assertEqual(response.status_code, 200)
+
+    def test_student_cannot_access_full_directory(self):
+        self.client.login(username='student1', password='TestPass123')
+        response = self.client.get(reverse('hirwafab:user_directory_full'))
+        self.assertEqual(response.status_code, 403)
+
+    def test_student_cannot_access_activity(self):
+        self.client.login(username='student1', password='TestPass123')
+        response = self.client.get(reverse('hirwafab:user_activity'))
+        self.assertEqual(response.status_code, 403)
+
+    def test_student_cannot_access_reports(self):
+        self.client.login(username='student1', password='TestPass123')
+        response = self.client.get(reverse('hirwafab:reports'))
+        self.assertEqual(response.status_code, 403)
+
+    def test_student_cannot_view_other_profile(self):
+        other = User.objects.create_user(username='other', password='TestPass123')
+        UserProfile.objects.get_or_create(user=other)
+        self.client.login(username='student1', password='TestPass123')
+        response = self.client.get(reverse('hirwafab:view_user_profile', args=[other.id]))
+        self.assertEqual(response.status_code, 403)
+
+
+class RBACInstructorTests(TestCase):
+    """Test that instructors can access privileged pages."""
+
+    def setUp(self):
+        self.client = Client()
+        self.instructor = User.objects.create_user(
+            username='instructor1', email='i@example.com', password='TestPass123'
+        )
+        UserProfile.objects.get_or_create(user=self.instructor)
+        instructors_group = Group.objects.get(name='instructors')
+        self.instructor.groups.add(instructors_group)
+
+        self.student = User.objects.create_user(
+            username='student2', email='s2@example.com', password='TestPass123'
+        )
+        UserProfile.objects.get_or_create(user=self.student)
+
+    def test_instructor_can_access_full_directory(self):
+        self.client.login(username='instructor1', password='TestPass123')
+        response = self.client.get(reverse('hirwafab:user_directory_full'))
+        self.assertEqual(response.status_code, 200)
+
+    def test_instructor_can_access_activity(self):
+        self.client.login(username='instructor1', password='TestPass123')
+        response = self.client.get(reverse('hirwafab:user_activity'))
+        self.assertEqual(response.status_code, 200)
+
+    def test_instructor_can_access_reports(self):
+        self.client.login(username='instructor1', password='TestPass123')
+        response = self.client.get(reverse('hirwafab:reports'))
+        self.assertEqual(response.status_code, 200)
+
+    def test_instructor_can_view_other_profile(self):
+        self.client.login(username='instructor1', password='TestPass123')
+        response = self.client.get(
+            reverse('hirwafab:view_user_profile', args=[self.student.id])
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def test_instructor_viewing_own_profile_redirects(self):
+        self.client.login(username='instructor1', password='TestPass123')
+        response = self.client.get(
+            reverse('hirwafab:view_user_profile', args=[self.instructor.id])
+        )
+        self.assertEqual(response.status_code, 302)
+
+
+class RBACAnonymousTests(TestCase):
+    """Test that anonymous users cannot access protected pages."""
+
+    def test_anonymous_cannot_access_dashboard(self):
+        response = self.client.get(reverse('hirwafab:dashboard'))
+        self.assertEqual(response.status_code, 302)
+
+    def test_anonymous_cannot_access_user_directory(self):
+        response = self.client.get(reverse('hirwafab:user_directory'))
+        self.assertEqual(response.status_code, 302)
+
+    def test_anonymous_cannot_access_reports(self):
+        response = self.client.get(reverse('hirwafab:reports'))
+        self.assertEqual(response.status_code, 302)
+
+    def test_anonymous_cannot_access_activity(self):
+        response = self.client.get(reverse('hirwafab:user_activity'))
+        self.assertEqual(response.status_code, 302)
+
+
+class RBACGroupAssignmentTests(TestCase):
+    """Test group and permission assignment logic."""
+
+    def test_students_group_has_correct_permissions(self):
+        group = Group.objects.get(name='students')
+        codenames = set(group.permissions.values_list('codename', flat=True))
+        self.assertIn('view_dashboard', codenames)
+        self.assertIn('view_own_profile', codenames)
+        self.assertIn('view_user_directory', codenames)
+        self.assertNotIn('view_all_profiles', codenames)
+        self.assertNotIn('download_reports', codenames)
+
+    def test_instructors_group_has_correct_permissions(self):
+        group = Group.objects.get(name='instructors')
+        codenames = set(group.permissions.values_list('codename', flat=True))
+        self.assertIn('view_all_profiles', codenames)
+        self.assertIn('view_user_activity', codenames)
+        self.assertIn('download_reports', codenames)
+
+    def test_new_user_assigned_to_students_group_on_register(self):
+        self.client.post(reverse('hirwafab:register'), {
+            'username': 'newstudent',
+            'email': 'new@example.com',
+            'password1': 'TestPass123',
+            'password2': 'TestPass123',
+        })
+        user = User.objects.get(username='newstudent')
+        self.assertTrue(user.groups.filter(name='students').exists())

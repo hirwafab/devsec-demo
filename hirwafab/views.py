@@ -1,9 +1,12 @@
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth import authenticate, login, logout
-from django.contrib.auth.decorators import login_required
+from django.contrib.auth.decorators import login_required, permission_required
+from django.contrib.auth.models import Group
 from django.contrib import messages
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_protect
+from django.http import HttpResponseForbidden
+from django.db.models import Q
 from .forms import RegistrationForm, LoginForm, PasswordChangeForm, UserProfileForm
 from .models import UserProfile
 
@@ -24,6 +27,13 @@ def register(request):
         form = RegistrationForm(request.POST)
         if form.is_valid():
             user = form.save()
+            # Auto-assign user to 'students' group for RBAC
+            try:
+                students_group = Group.objects.get(name='students')
+                user.groups.add(students_group)
+            except Group.DoesNotExist:
+                pass  # Group will be created via management command
+            
             messages.success(
                 request,
                 f'Account created successfully! Welcome {user.username}. You can now log in.'
@@ -61,6 +71,13 @@ def login_view(request):
 
             if user is not None:
                 login(request, user)
+                # Ensure user is in students group — handles accounts created
+                # before RBAC migration ran.
+                if not user.groups.exists():
+                    try:
+                        user.groups.add(Group.objects.get(name='students'))
+                    except Group.DoesNotExist:
+                        pass
                 messages.success(request, f'Welcome back, {user.username}!')
                 return redirect('hirwafab:dashboard')
             else:
@@ -88,9 +105,10 @@ def logout_view(request):
 
 
 @login_required(login_url='hirwafab:login')
+@permission_required('hirwafab.view_dashboard', raise_exception=True)
 def dashboard(request):
     """
-    Protected dashboard page - requires authentication.
+    Protected dashboard page - requires authentication and view_dashboard permission.
     Displays user's profile information and welcome message.
     """
     try:
@@ -106,10 +124,12 @@ def dashboard(request):
 
 
 @login_required(login_url='hirwafab:login')
+@permission_required('hirwafab.change_own_password', raise_exception=True)
 @require_http_methods(["GET", "POST"])
 def change_password(request):
     """
     Handle password change for authenticated users.
+    Requires change_own_password permission.
     
     GET: Display password change form
     POST: Process password change with validation
@@ -132,10 +152,12 @@ def change_password(request):
 
 
 @login_required(login_url='hirwafab:login')
+@permission_required('hirwafab.view_own_profile', raise_exception=True)
 @require_http_methods(["GET", "POST"])
 def profile(request):
     """
     Handle user profile view and updates.
+    Requires view_own_profile permission.
     
     GET: Display user profile
     POST: Update profile information
@@ -163,3 +185,106 @@ def profile(request):
         'profile': user_profile,
     }
     return render(request, 'hirwafab/profile.html', context)
+
+
+@login_required(login_url='hirwafab:login')
+@permission_required('hirwafab.view_user_directory', raise_exception=True)
+def user_directory(request):
+    """
+    Public user directory - shows all users with basic information.
+    Requires view_user_directory permission (student and above).
+    """
+    users = UserProfile.objects.all().select_related('user')
+    
+    context = {
+        'users': users,
+        'is_public_view': True,
+    }
+    return render(request, 'hirwafab/user_directory.html', context)
+
+
+@login_required(login_url='hirwafab:login')
+@permission_required('hirwafab.view_all_profiles', raise_exception=True)
+def user_directory_full(request):
+    """
+    Full user directory with detailed information - instructor/admin only.
+    Requires view_all_profiles permission (instructors and above).
+    Shows email, bio, avatar, and registration date.
+    """
+    users = UserProfile.objects.all().select_related('user')
+    
+    context = {
+        'users': users,
+        'is_full_view': True,
+    }
+    return render(request, 'hirwafab/user_directory_full.html', context)
+
+
+@login_required(login_url='hirwafab:login')
+@permission_required('hirwafab.view_all_profiles', raise_exception=True)
+def view_user_profile(request, user_id):
+    """
+    View another user's profile - instructor/admin only.
+    Requires view_all_profiles permission.
+    Can only view other users' full profiles, not their own (use profile() for that).
+    """
+    if request.user.id == user_id:
+        return redirect('hirwafab:profile')
+    
+    user_profile = get_object_or_404(UserProfile, user_id=user_id)
+    
+    context = {
+        'profile': user_profile,
+        'is_other_profile': True,
+    }
+    return render(request, 'hirwafab/view_user_profile.html', context)
+
+
+@login_required(login_url='hirwafab:login')
+@permission_required('hirwafab.view_user_activity', raise_exception=True)
+def user_activity(request):
+    """
+    View user activity and statistics - instructor only.
+    Requires view_user_activity permission.
+    Shows registration dates, last login info, and activity summary.
+    """
+    users = UserProfile.objects.all().select_related('user').order_by('-created_at')
+    
+    # Calculate statistics
+    total_users = users.count()
+    recent_registrations = users[:10]  # Last 10 registered
+    
+    context = {
+        'users': users,
+        'total_users': total_users,
+        'recent_registrations': recent_registrations,
+    }
+    return render(request, 'hirwafab/user_activity.html', context)
+
+
+@login_required(login_url='hirwafab:login')
+@permission_required('hirwafab.download_reports', raise_exception=True)
+def reports(request):
+    """
+    Generate and download user reports - instructor only.
+    Requires download_reports permission.
+    Provides export of user data in various formats.
+    """
+    users = UserProfile.objects.all().select_related('user')
+    user_data = []
+    
+    for profile in users:
+        user_data.append({
+            'username': profile.user.username,
+            'email': profile.user.email,
+            'first_name': profile.user.first_name,
+            'last_name': profile.user.last_name,
+            'registered': profile.created_at,
+            'bio': profile.bio,
+        })
+    
+    context = {
+        'user_count': users.count(),
+        'user_data': user_data,
+    }
+    return render(request, 'hirwafab/reports.html', context)

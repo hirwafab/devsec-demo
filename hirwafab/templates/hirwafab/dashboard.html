@@ -65,16 +65,40 @@
         {% endif %}
 
         <div class="links-grid">
+            {% if perms.hirwafab.view_own_profile %}
             <a href="{% url 'hirwafab:profile' %}" class="link-card">
-                <h3>📝 Edit Profile</h3>
+                <h3>Edit Profile</h3>
                 <p>Update your personal information</p>
             </a>
+            {% endif %}
+            {% if perms.hirwafab.change_own_password %}
             <a href="{% url 'hirwafab:change_password' %}" class="link-card">
-                <h3>🔐 Change Password</h3>
+                <h3>Change Password</h3>
                 <p>Update your account security</p>
             </a>
+            {% endif %}
+            {% if perms.hirwafab.view_user_directory %}
+            <a href="{% url 'hirwafab:user_directory' %}" class="link-card">
+                <h3>User Directory</h3>
+                <p>Browse registered users</p>
+            </a>
+            {% endif %}
+            {% if perms.hirwafab.view_all_profiles %}
+            <a href="{% url 'hirwafab:user_directory_full' %}" class="link-card">
+                <h3>Full Directory</h3>
+                <p>View all user details</p>
+            </a>
+            <a href="{% url 'hirwafab:user_activity' %}" class="link-card">
+                <h3>Activity Log</h3>
+                <p>Monitor user activity</p>
+            </a>
+            <a href="{% url 'hirwafab:reports' %}" class="link-card">
+                <h3>Reports</h3>
+                <p>Export user data</p>
+            </a>
+            {% endif %}
             <a href="{% url 'hirwafab:logout' %}" class="link-card">
-                <h3>🚪 Sign Out</h3>
+                <h3>Sign Out</h3>
                 <p>Logout from your account</p>
             </a>
         </div>

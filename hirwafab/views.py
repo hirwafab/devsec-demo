@@ -5,7 +5,7 @@ from django.contrib.auth.models import Group
 from django.contrib import messages
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_protect
-from django.http import HttpResponseForbidden
+from django.core.exceptions import PermissionDenied
 from django.db.models import Q
 from .forms import RegistrationForm, LoginForm, PasswordChangeForm, UserProfileForm
 from .models import UserProfile
@@ -134,6 +134,12 @@ def change_password(request):
     GET: Display password change form
     POST: Process password change with validation
     """
+    # Object-level ownership check: password changes must only ever apply to
+    # the currently authenticated user — never to a user resolved from
+    # external input.
+    if not request.user.is_authenticated:
+        raise PermissionDenied
+
     if request.method == 'POST':
         form = PasswordChangeForm(request.user, request.POST)
         if form.is_valid():
@@ -166,6 +172,12 @@ def profile(request):
         user_profile = request.user.profile
     except UserProfile.DoesNotExist:
         user_profile = UserProfile.objects.create(user=request.user)
+
+    # Object-level ownership check: the profile being edited must belong to
+    # the currently authenticated user. This prevents IDOR if the profile
+    # object is ever resolved through a different path.
+    if user_profile.user != request.user:
+        raise PermissionDenied
 
     if request.method == 'POST':
         form = UserProfileForm(request.POST, request.FILES, instance=user_profile)
@@ -228,11 +240,19 @@ def view_user_profile(request, user_id):
     Requires view_all_profiles permission.
     Can only view other users' full profiles, not their own (use profile() for that).
     """
+    # Redirect to own profile page when requesting own user_id
     if request.user.id == user_id:
         return redirect('hirwafab:profile')
-    
+
     user_profile = get_object_or_404(UserProfile, user_id=user_id)
-    
+
+    # Object-level check: even after the role-level @permission_required above,
+    # explicitly verify the requesting user is authorised to view this specific
+    # profile object. Only instructors (view_all_profiles) and superusers may
+    # view another user's full profile.
+    if not (request.user.has_perm('hirwafab.view_all_profiles') or request.user.is_superuser):
+        raise PermissionDenied
+
     context = {
         'profile': user_profile,
         'is_other_profile': True,

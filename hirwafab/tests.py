@@ -524,3 +524,122 @@ class RBACGroupAssignmentTests(TestCase):
         })
         user = User.objects.get(username='newstudent')
         self.assertTrue(user.groups.filter(name='students').exists())
+
+
+class IDORProfileTests(TestCase):
+    """
+    Tests that verify object-level access control prevents IDOR attacks.
+    A user must never be able to view or modify another user's data
+    by changing a URL identifier.
+    """
+
+    def setUp(self):
+        self.client = Client()
+        students_group = Group.objects.get(name='students')
+        instructors_group = Group.objects.get(name='instructors')
+
+        self.student_a = User.objects.create_user(
+            username='student_a', email='a@example.com', password='TestPass123'
+        )
+        self.profile_a = UserProfile.objects.create(user=self.student_a)
+        self.student_a.groups.add(students_group)
+
+        self.student_b = User.objects.create_user(
+            username='student_b', email='b@example.com', password='TestPass123'
+        )
+        self.profile_b = UserProfile.objects.create(user=self.student_b)
+        self.student_b.groups.add(students_group)
+
+        self.instructor = User.objects.create_user(
+            username='instructor', email='i@example.com', password='TestPass123'
+        )
+        UserProfile.objects.create(user=self.instructor)
+        self.instructor.groups.add(instructors_group)
+
+    # --- Student cannot access another student's profile via URL ---
+
+    def test_student_cannot_view_other_student_profile_url(self):
+        """Student A cannot access student B's profile by changing user_id in URL."""
+        self.client.login(username='student_a', password='TestPass123')
+        response = self.client.get(
+            reverse('hirwafab:view_user_profile', args=[self.student_b.id])
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_anonymous_cannot_view_any_profile_url(self):
+        """Unauthenticated request to a profile URL is redirected."""
+        response = self.client.get(
+            reverse('hirwafab:view_user_profile', args=[self.student_a.id])
+        )
+        self.assertEqual(response.status_code, 302)
+
+    def test_instructor_can_view_any_student_profile(self):
+        """Instructor can view a student's profile by user_id."""
+        self.client.login(username='instructor', password='TestPass123')
+        response = self.client.get(
+            reverse('hirwafab:view_user_profile', args=[self.student_a.id])
+        )
+        self.assertEqual(response.status_code, 200)
+
+    def test_viewing_own_user_id_redirects_to_own_profile(self):
+        """Requesting own user_id in the URL redirects to own profile page."""
+        self.client.login(username='instructor', password='TestPass123')
+        response = self.client.get(
+            reverse('hirwafab:view_user_profile', args=[self.instructor.id])
+        )
+        self.assertEqual(response.status_code, 302)
+
+    # --- Profile edit ownership ---
+
+    def test_student_can_edit_own_profile(self):
+        """A student can edit their own profile."""
+        self.client.login(username='student_a', password='TestPass123')
+        response = self.client.post(reverse('hirwafab:profile'), {
+            'first_name': 'Alice',
+            'last_name': 'Test',
+            'email': 'a@example.com',
+            'bio': 'Hello',
+        })
+        self.assertEqual(response.status_code, 302)
+        self.student_a.refresh_from_db()
+        self.assertEqual(self.student_a.first_name, 'Alice')
+
+    def test_profile_edit_only_modifies_own_data(self):
+        """Profile edit never touches another user's data."""
+        self.client.login(username='student_a', password='TestPass123')
+        self.client.post(reverse('hirwafab:profile'), {
+            'first_name': 'Alice',
+            'last_name': 'Test',
+            'email': 'a@example.com',
+            'bio': 'Hello',
+        })
+        # Student B's data must be unchanged
+        self.student_b.refresh_from_db()
+        self.assertEqual(self.student_b.first_name, '')
+
+    # --- Password change ownership ---
+
+    def test_student_can_change_own_password(self):
+        """A student can change their own password."""
+        self.client.login(username='student_a', password='TestPass123')
+        response = self.client.post(reverse('hirwafab:change_password'), {
+            'old_password': 'TestPass123',
+            'new_password1': 'NewPass456!',
+            'new_password2': 'NewPass456!',
+        })
+        self.assertEqual(response.status_code, 302)
+
+    def test_unauthenticated_cannot_change_password(self):
+        """Unauthenticated request to change-password is redirected."""
+        response = self.client.get(reverse('hirwafab:change_password'))
+        self.assertEqual(response.status_code, 302)
+
+    # --- Non-existent profile ID returns 404 not 500 ---
+
+    def test_nonexistent_user_id_returns_404(self):
+        """Requesting a user_id that does not exist returns 404, not 500."""
+        self.client.login(username='instructor', password='TestPass123')
+        response = self.client.get(
+            reverse('hirwafab:view_user_profile', args=[99999])
+        )
+        self.assertEqual(response.status_code, 404)

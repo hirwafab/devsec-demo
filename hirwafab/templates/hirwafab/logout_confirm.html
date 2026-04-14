@@ -1,0 +1,21 @@
+{% extends 'hirwafab/base.html' %}
+
+{% block title %}Confirm Logout - Authentication Service{% endblock %}
+
+{% block content %}
+<div class="container">
+    <h1>Confirm Logout</h1>
+
+    <p style="text-align: center; color: #666; margin-bottom: 30px;">
+        Are you sure you want to log out? You'll need to log in again to access protected pages.
+    </p>
+
+    <form method="post">
+        {% csrf_token %}
+        <button type="submit" class="btn">Yes, Log Me Out</button>
+        <a href="{% url 'hirwafab:dashboard' %}" style="display: block; margin-top: 10px;">
+            <button type="button" class="btn btn-secondary">No, Take Me Back</button>
+        </a>
+    </form>
+</div>
+{% endblock %}

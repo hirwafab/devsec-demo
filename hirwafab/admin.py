@@ -17,7 +17,7 @@ class UserProfileAdmin(admin.ModelAdmin):
             'fields': ('user',)
         }),
         ('Profile Information', {
-            'fields': ('bio', 'profile_picture')
+            'fields': ('bio', 'avatar')
         }),
         ('Timestamps', {
             'fields': ('created_at', 'updated_at'),

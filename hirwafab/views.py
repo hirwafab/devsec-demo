@@ -150,7 +150,7 @@ def profile(request):
         if form.is_valid():
             form.save()
             messages.success(request, 'Your profile has been updated successfully.')
-            return redirect('hirwafab:profile')
+            return redirect('hirwafab:dashboard')
         else:
             for field, errors in form.errors.items():
                 for error in errors:

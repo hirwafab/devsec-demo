@@ -4,17 +4,20 @@
 
 {% block content %}
 <div class="container">
-    <h1>Confirm Logout</h1>
+    <h1>👋 Sign Out Confirmation</h1>
 
-    <p style="text-align: center; color: #666; margin-bottom: 30px;">
-        Are you sure you want to log out? You'll need to log in again to access protected pages.
-    </p>
+    <div style="text-align: center; margin: 32px 0;">
+        <p style="color: #6b7280; font-size: 15px; line-height: 1.6;">
+            Are you sure you want to sign out?<br>
+            <span style="font-size: 13px;">You'll need to log in again to access your account.</span>
+        </p>
+    </div>
 
-    <form method="post">
+    <form method="post" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
         {% csrf_token %}
-        <button type="submit" class="btn">Yes, Log Me Out</button>
-        <a href="{% url 'hirwafab:dashboard' %}" style="display: block; margin-top: 10px;">
-            <button type="button" class="btn btn-secondary">No, Take Me Back</button>
+        <button type="submit" class="btn" style="background-color: #ef4444;">Yes, Sign Me Out</button>
+        <a href="{% url 'hirwafab:dashboard' %}">
+            <button type="button" class="btn btn-secondary">Cancel</button>
         </a>
     </form>
 </div>

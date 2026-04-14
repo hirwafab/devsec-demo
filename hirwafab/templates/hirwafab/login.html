@@ -1,10 +1,10 @@
 {% extends 'hirwafab/base.html' %}
 
-{% block title %}Log In - Authentication Service{% endblock %}
+{% block title %}Sign In - Authentication Service{% endblock %}
 
 {% block content %}
 <div class="container">
-    <h1>Log In</h1>
+    <h1>🔐 Welcome Back</h1>
 
     {% if messages %}
         <div class="messages">
@@ -31,7 +31,11 @@
             {{ form.username.label_tag }}
             {{ form.username }}
             {% if form.username.errors %}
-                {{ form.username.errors }}
+                <ul class="errorlist">
+                    {% for error in form.username.errors %}
+                        <li>{{ error }}</li>
+                    {% endfor %}
+                </ul>
             {% endif %}
         </div>
 
@@ -39,15 +43,19 @@
             {{ form.password.label_tag }}
             {{ form.password }}
             {% if form.password.errors %}
-                {{ form.password.errors }}
+                <ul class="errorlist">
+                    {% for error in form.password.errors %}
+                        <li>{{ error }}</li>
+                    {% endfor %}
+                </ul>
             {% endif %}
         </div>
 
-        <button type="submit" class="btn">Log In</button>
+        <button type="submit" class="btn">Sign In</button>
     </form>
 
     <div class="text-center">
-        Don't have an account? <a href="{% url 'hirwafab:register' %}">Register here</a>
+        Don't have an account? <a href="{% url 'hirwafab:register' %}">Create one now</a>
     </div>
 </div>
 {% endblock %}

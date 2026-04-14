@@ -144,10 +144,18 @@ class UserProfileForm(forms.ModelForm):
             'placeholder': 'Enter your email',
         })
     )
+    avatar = forms.ImageField(
+        label="Profile Picture",
+        required=False,
+        widget=forms.FileInput(attrs={
+            'class': 'form-control',
+            'accept': 'image/*',
+        })
+    )
 
     class Meta:
         model = UserProfile
-        fields = ('bio', 'profile_picture')
+        fields = ('bio', 'avatar')
         widgets = {
             'bio': forms.Textarea(attrs={
                 'class': 'form-control',

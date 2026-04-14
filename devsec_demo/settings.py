@@ -129,3 +129,15 @@ MEDIA_ROOT = BASE_DIR / 'media'
 # https://docs.djangoproject.com/en/6.0/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# Email configuration
+# In development, emails are printed to the console.
+# Set EMAIL_BACKEND in .env for production (e.g. SMTP).
+EMAIL_BACKEND = os.environ.get(
+    'EMAIL_BACKEND',
+    'django.core.mail.backends.console.EmailBackend'
+)
+DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'noreply@hirwafab.local')
+
+# Password reset token expires after 1 day (86400 seconds)
+PASSWORD_RESET_TIMEOUT = 86400

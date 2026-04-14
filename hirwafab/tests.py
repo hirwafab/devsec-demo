@@ -643,3 +643,117 @@ class IDORProfileTests(TestCase):
             reverse('hirwafab:view_user_profile', args=[99999])
         )
         self.assertEqual(response.status_code, 404)
+
+
+class PasswordResetTests(TestCase):
+    """
+    Tests for the secure password reset workflow.
+    Covers request, token validation, confirmation, and anti-enumeration.
+    """
+
+    def setUp(self):
+        self.client = Client()
+        self.user = User.objects.create_user(
+            username='resetuser',
+            email='reset@example.com',
+            password='OldPass123'
+        )
+
+    def test_reset_request_page_loads(self):
+        """Password reset request page is accessible to anyone."""
+        response = self.client.get(reverse('hirwafab:password_reset'))
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, 'hirwafab/password_reset.html')
+
+    def test_reset_request_with_valid_email_redirects_to_done(self):
+        """Submitting a valid email redirects to the done page."""
+        response = self.client.post(reverse('hirwafab:password_reset'), {
+            'email': 'reset@example.com',
+        })
+        self.assertEqual(response.status_code, 302)
+        self.assertRedirects(response, reverse('hirwafab:password_reset_done'))
+
+    def test_reset_request_with_unknown_email_still_redirects(self):
+        """
+        Submitting an unknown email also redirects to done — no user enumeration.
+        The response must be identical to the valid case.
+        """
+        response = self.client.post(reverse('hirwafab:password_reset'), {
+            'email': 'nobody@example.com',
+        })
+        self.assertEqual(response.status_code, 302)
+        self.assertRedirects(response, reverse('hirwafab:password_reset_done'))
+
+    def test_reset_done_page_loads(self):
+        """The 'check your email' page loads correctly."""
+        response = self.client.get(reverse('hirwafab:password_reset_done'))
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, 'hirwafab/password_reset_done.html')
+
+    def test_reset_confirm_with_invalid_token_shows_error(self):
+        """An invalid or expired token shows an error, not a form."""
+        response = self.client.get(
+            reverse('hirwafab:password_reset_confirm', kwargs={
+                'uidb64': 'invalid',
+                'token': 'invalid-token',
+            })
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.context['validlink'])
+
+    def test_full_reset_flow(self):
+        """Full flow: request → token → confirm → complete → can login."""
+        from django.utils.http import urlsafe_base64_encode
+        from django.utils.encoding import force_bytes
+        from django.contrib.auth.tokens import default_token_generator
+
+        uid = urlsafe_base64_encode(force_bytes(self.user.pk))
+        token = default_token_generator.make_token(self.user)
+
+        # GET the confirm page with a valid token
+        confirm_url = reverse('hirwafab:password_reset_confirm', kwargs={
+            'uidb64': uid,
+            'token': token,
+        })
+        response = self.client.get(confirm_url, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.context['validlink'])
+
+        # POST the new password using the session URL Django sets after GET
+        session_url = response.redirect_chain[-1][0] if response.redirect_chain else confirm_url
+        response = self.client.post(session_url, {
+            'new_password1': 'NewSecurePass456!',
+            'new_password2': 'NewSecurePass456!',
+        })
+        self.assertEqual(response.status_code, 302)
+
+        # Old password no longer works
+        self.assertFalse(
+            self.client.login(username='resetuser', password='OldPass123')
+        )
+        # New password works
+        self.assertTrue(
+            self.client.login(username='resetuser', password='NewSecurePass456!')
+        )
+
+    def test_reset_email_sent_for_valid_user(self):
+        """Exactly one email is sent when a valid email is submitted."""
+        from django.core import mail
+        self.client.post(reverse('hirwafab:password_reset'), {
+            'email': 'reset@example.com',
+        })
+        self.assertEqual(len(mail.outbox), 1)
+
+    def test_no_email_sent_for_unknown_address(self):
+        """No email is sent for an address not in the system."""
+        from django.core import mail
+        self.client.post(reverse('hirwafab:password_reset'), {
+            'email': 'nobody@example.com',
+        })
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_reset_complete_page_loads(self):
+        """The password reset complete page loads correctly."""
+        response = self.client.get(reverse('hirwafab:password_reset_complete'))
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, 'hirwafab/password_reset_complete.html')

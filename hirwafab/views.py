@@ -8,6 +8,7 @@ from django.contrib.auth.models import Group
 from django.contrib import messages
 from django.http import JsonResponse
 from django.utils import timezone
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_protect
 from django.core.exceptions import PermissionDenied
@@ -25,6 +26,28 @@ LOCKOUT_WINDOW_MINUTES = 15  # rolling window that failures are counted within
 def _get_client_ip(request):
     """Return the client's IP address from the request."""
     return request.META.get('REMOTE_ADDR', '0.0.0.0')
+
+
+def _safe_next_url(request, fallback='hirwafab:dashboard'):
+    """
+    Return a validated redirect target from the next GET or POST parameter.
+
+    Uses Django's url_has_allowed_host_and_scheme to ensure the target is:
+    - a relative path (no scheme → no external domain possible), OR
+    - an absolute URL whose host matches the current request host.
+
+    Any value that fails this check is discarded and the fallback named URL
+    is returned instead. This prevents open redirect attacks where an attacker
+    supplies next=https://evil.com to silently forward the victim after login.
+    """
+    next_url = request.POST.get('next', request.GET.get('next', ''))
+    if next_url and url_has_allowed_host_and_scheme(
+        url=next_url,
+        allowed_hosts={request.get_host()},
+        require_https=request.is_secure(),
+    ):
+        return next_url
+    return fallback
 
 
 def _lockout_info(username, ip_address):
@@ -122,10 +145,8 @@ def login_view(request):
     ip_address = _get_client_ip(request)
     extra_context = {}
 
-    # INSECURE: accept next from GET or POST with no validation.
-    # An attacker can craft a link like /login/?next=https://evil.com and the
-    # victim will be silently forwarded to an external site after logging in.
-    next_url = request.POST.get('next', request.GET.get('next', ''))
+    # Validate next before use — rejects external hosts and bare-scheme URLs.
+    next_url = _safe_next_url(request, fallback='hirwafab:dashboard')
 
     if request.method == 'POST':
         form = LoginForm(request.POST)
@@ -159,8 +180,7 @@ def login_view(request):
                         except Group.DoesNotExist:
                             pass
                     messages.success(request, f'Welcome back, {user.username}!')
-                    # INSECURE: redirect to next_url without any validation
-                    return redirect(next_url or 'hirwafab:dashboard')
+                    return redirect(next_url)
                 else:
                     LoginAttempt.objects.create(username=username, ip_address=ip_address)
                     messages.error(request, 'Invalid username or password.')
@@ -179,12 +199,10 @@ def logout_view(request):
     Clears the user session and redirects to login page.
     """
     if request.method == 'POST':
-        # INSECURE: accept next from POST with no validation.
-        next_url = request.POST.get('next', '')
+        next_url = _safe_next_url(request, fallback='hirwafab:login')
         logout(request)
         messages.success(request, 'You have been logged out successfully.')
-        # INSECURE: redirect to next_url without any validation
-        return redirect(next_url or 'hirwafab:login')
+        return redirect(next_url)
 
     return render(request, 'hirwafab/logout_confirm.html')
 

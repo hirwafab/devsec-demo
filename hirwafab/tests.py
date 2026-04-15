@@ -1019,3 +1019,108 @@ class CSRFBioUpdateTests(TestCase):
         self._post(self.safe_client, bio=long_bio)
         self.user.profile.refresh_from_db()
         self.assertEqual(len(self.user.profile.bio), 500)
+
+
+# ---------------------------------------------------------------------------
+# Open redirect tests for login and logout flows
+# ---------------------------------------------------------------------------
+
+class OpenRedirectTests(TestCase):
+    """
+    Verify that the login and logout endpoints validate the next parameter
+    and never redirect to external or untrusted destinations.
+
+    The fix uses url_has_allowed_host_and_scheme which rejects:
+    - Absolute URLs whose host differs from the current request host
+    - Protocol-relative URLs like //evil.com (same bypass, different syntax)
+    - Any value that could forward the user off-site
+    """
+
+    def setUp(self):
+        self.client = Client()
+        self.login_url = reverse('hirwafab:login')
+        self.logout_url = reverse('hirwafab:logout')
+        self.user = User.objects.create_user(
+            username='redirecttest',
+            password='SecurePass123!',
+        )
+        self.credentials = {
+            'username': 'redirecttest',
+            'password': 'SecurePass123!',
+        }
+
+    # --- login next parameter tests --------------------------------------
+
+    def test_login_safe_internal_next_is_followed(self):
+        """A relative internal path in next is accepted after login."""
+        response = self.client.post(
+            self.login_url + '?next=/hirwafab/dashboard/',
+            self.credentials,
+        )
+        self.assertRedirects(response, '/hirwafab/dashboard/', fetch_redirect_response=False)
+
+    def test_login_external_next_is_rejected(self):
+        """An absolute external URL in next is ignored; user goes to dashboard."""
+        response = self.client.post(
+            self.login_url,
+            {**self.credentials, 'next': 'https://evil.com'},
+        )
+        self.assertRedirects(
+            response, reverse('hirwafab:dashboard'), fetch_redirect_response=False
+        )
+
+    def test_login_protocol_relative_next_is_rejected(self):
+        """A protocol-relative URL (//evil.com) is rejected — common bypass attempt."""
+        response = self.client.post(
+            self.login_url,
+            {**self.credentials, 'next': '//evil.com/phish'},
+        )
+        self.assertRedirects(
+            response, reverse('hirwafab:dashboard'), fetch_redirect_response=False
+        )
+
+    def test_login_missing_next_redirects_to_dashboard(self):
+        """When next is absent the user lands on the dashboard."""
+        response = self.client.post(self.login_url, self.credentials)
+        self.assertRedirects(
+            response, reverse('hirwafab:dashboard'), fetch_redirect_response=False
+        )
+
+    def test_login_next_preserved_across_get_to_post(self):
+        """next in the GET query string is passed through to the POST form."""
+        get_response = self.client.get(self.login_url + '?next=/hirwafab/dashboard/')
+        self.assertContains(get_response, 'name="next"')
+        self.assertContains(get_response, '/hirwafab/dashboard/')
+
+    # --- logout next parameter tests -------------------------------------
+
+    def test_logout_safe_internal_next_is_followed(self):
+        """A relative internal path in next is accepted after logout."""
+        self.client.login(username='redirecttest', password='SecurePass123!')
+        response = self.client.post(
+            self.logout_url,
+            {'next': '/hirwafab/login/'},
+        )
+        self.assertRedirects(response, '/hirwafab/login/', fetch_redirect_response=False)
+
+    def test_logout_external_next_is_rejected(self):
+        """An absolute external URL in next is ignored; user goes to login."""
+        self.client.login(username='redirecttest', password='SecurePass123!')
+        response = self.client.post(
+            self.logout_url,
+            {'next': 'https://evil.com'},
+        )
+        self.assertRedirects(
+            response, reverse('hirwafab:login'), fetch_redirect_response=False
+        )
+
+    def test_logout_protocol_relative_next_is_rejected(self):
+        """A protocol-relative URL (//evil.com) is rejected on logout too."""
+        self.client.login(username='redirecttest', password='SecurePass123!')
+        response = self.client.post(
+            self.logout_url,
+            {'next': '//evil.com'},
+        )
+        self.assertRedirects(
+            response, reverse('hirwafab:login'), fetch_redirect_response=False
+        )

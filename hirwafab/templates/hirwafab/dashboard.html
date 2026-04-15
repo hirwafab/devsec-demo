@@ -56,10 +56,7 @@
         {% if profile.bio %}
             <div class="info-section">
                 <h3>📖 About You</h3>
-                {# INSECURE: |safe was added to allow basic HTML in bios.
-                   Any HTML the user stores is injected directly into the page,
-                   including <script> tags and event handlers. #}
-                <p>{{ profile.bio|safe }}</p>
+                <p>{{ profile.bio }}</p>
             </div>
         {% else %}
             <div class="info-section" style="color: #9ca3af; font-style: italic;">

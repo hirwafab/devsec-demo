@@ -1271,3 +1271,109 @@ class AuditLoggingTests(TestCase):
         combined = ' '.join(log.output)
         self.assertNotIn(old_pass, combined)
         self.assertNotIn(new_pass, combined)
+
+
+# ---------------------------------------------------------------------------
+# Stored XSS tests for profile bio content
+# ---------------------------------------------------------------------------
+
+class StoredXSSTests(TestCase):
+    """
+    Verify that user-controlled bio content is HTML-escaped before rendering
+    and cannot be used to inject executable script payloads.
+
+    Django's template engine escapes {{ variable }} by default. These tests
+    confirm that no |safe filter or autoescape-off block bypasses that
+    escaping in the templates that render bio content.
+    """
+
+    XSS_PAYLOAD = '<script>document.cookie</script>'
+    EVENT_PAYLOAD = '<img src=x onerror=alert(1)>'
+    PLAIN_BIO = 'Hello, I am a student.'
+
+    def setUp(self):
+        self.client = Client()
+
+        # Victim user: stores XSS payload in bio
+        self.victim = User.objects.create_user(
+            username='xssvictim', password='VictimPass123!'
+        )
+        self.victim_profile, _ = UserProfile.objects.get_or_create(user=self.victim)
+        try:
+            self.victim.groups.add(Group.objects.get(name='students'))
+        except Group.DoesNotExist:
+            pass
+
+        # Instructor: views the victim's profile
+        self.instructor = User.objects.create_user(
+            username='xssinstructor', password='InstructorPass123!'
+        )
+        UserProfile.objects.get_or_create(user=self.instructor)
+        try:
+            self.instructor.groups.add(Group.objects.get(name='instructors'))
+        except Group.DoesNotExist:
+            pass
+
+    def _store_bio(self, user, bio):
+        """Directly write bio to the database, bypassing form validation."""
+        profile = user.profile
+        profile.bio = bio
+        profile.save(update_fields=['bio'])
+
+    # --- dashboard --------------------------------------------------------
+
+    def test_script_tag_escaped_on_dashboard(self):
+        """A <script> payload in bio must not appear unescaped on the dashboard."""
+        self._store_bio(self.victim, self.XSS_PAYLOAD)
+        self.client.login(username='xssvictim', password='VictimPass123!')
+        response = self.client.get(reverse('hirwafab:dashboard'))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn(self.XSS_PAYLOAD, response.content.decode())
+        # The escaped version should be present instead
+        self.assertIn('&lt;script&gt;', response.content.decode())
+
+    def test_event_handler_escaped_on_dashboard(self):
+        """An onerror event-handler payload must be escaped on the dashboard."""
+        self._store_bio(self.victim, self.EVENT_PAYLOAD)
+        self.client.login(username='xssvictim', password='VictimPass123!')
+        response = self.client.get(reverse('hirwafab:dashboard'))
+        self.assertNotIn('<img src=x onerror=alert(1)>', response.content.decode())
+
+    def test_plain_text_bio_renders_correctly_on_dashboard(self):
+        """Legitimate plain-text bio content must display without modification."""
+        self._store_bio(self.victim, self.PLAIN_BIO)
+        self.client.login(username='xssvictim', password='VictimPass123!')
+        response = self.client.get(reverse('hirwafab:dashboard'))
+        self.assertContains(response, self.PLAIN_BIO)
+
+    # --- view_user_profile (instructor view) ------------------------------
+
+    def test_script_tag_escaped_on_instructor_profile_view(self):
+        """A <script> payload in a student's bio must not execute in the
+        instructor's browser when they view the student's profile."""
+        self._store_bio(self.victim, self.XSS_PAYLOAD)
+        self.client.login(username='xssinstructor', password='InstructorPass123!')
+        response = self.client.get(
+            reverse('hirwafab:view_user_profile', args=[self.victim.id])
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn(self.XSS_PAYLOAD, response.content.decode())
+        self.assertIn('&lt;script&gt;', response.content.decode())
+
+    def test_event_handler_escaped_on_instructor_profile_view(self):
+        """An event-handler payload must be escaped in the instructor profile view."""
+        self._store_bio(self.victim, self.EVENT_PAYLOAD)
+        self.client.login(username='xssinstructor', password='InstructorPass123!')
+        response = self.client.get(
+            reverse('hirwafab:view_user_profile', args=[self.victim.id])
+        )
+        self.assertNotIn('<img src=x onerror=alert(1)>', response.content.decode())
+
+    def test_plain_text_bio_renders_correctly_on_instructor_view(self):
+        """Legitimate bio text must display correctly in the instructor view."""
+        self._store_bio(self.victim, self.PLAIN_BIO)
+        self.client.login(username='xssinstructor', password='InstructorPass123!')
+        response = self.client.get(
+            reverse('hirwafab:view_user_profile', args=[self.victim.id])
+        )
+        self.assertContains(response, self.PLAIN_BIO)

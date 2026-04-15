@@ -1,14 +1,60 @@
+from datetime import timedelta
+
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.decorators import login_required, permission_required
 from django.contrib.auth.models import Group
 from django.contrib import messages
+from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 from django.views.decorators.csrf import csrf_protect
 from django.core.exceptions import PermissionDenied
 from django.db.models import Q
 from .forms import RegistrationForm, LoginForm, PasswordChangeForm, UserProfileForm
-from .models import UserProfile
+from .models import UserProfile, LoginAttempt
+
+# ---------------------------------------------------------------------------
+# Brute-force protection constants
+# ---------------------------------------------------------------------------
+MAX_LOGIN_ATTEMPTS = 5       # failures allowed before lockout triggers
+LOCKOUT_WINDOW_MINUTES = 15  # rolling window that failures are counted within
+
+
+def _get_client_ip(request):
+    """Return the client's IP address from the request."""
+    return request.META.get('REMOTE_ADDR', '0.0.0.0')
+
+
+def _lockout_info(username, ip_address):
+    """
+    Check whether a username or IP address is currently locked out.
+
+    Counts failed LoginAttempt records within the rolling LOCKOUT_WINDOW_MINUTES.
+    If either the per-account or per-IP count reaches MAX_LOGIN_ATTEMPTS the
+    login is blocked until the most recent triggering failure ages out of the
+    window.
+
+    Returns:
+        (is_locked: bool, minutes_remaining: int)
+    """
+    window_start = timezone.now() - timedelta(minutes=LOCKOUT_WINDOW_MINUTES)
+
+    checks = [
+        LoginAttempt.objects.filter(username__iexact=username, timestamp__gte=window_start),
+        LoginAttempt.objects.filter(ip_address=ip_address, timestamp__gte=window_start),
+    ]
+
+    for attempts_qs in checks:
+        if attempts_qs.count() >= MAX_LOGIN_ATTEMPTS:
+            latest = attempts_qs.latest('timestamp')
+            unlock_at = latest.timestamp + timedelta(minutes=LOCKOUT_WINDOW_MINUTES)
+            now = timezone.now()
+            if now < unlock_at:
+                seconds_left = int((unlock_at - now).total_seconds())
+                minutes_left = max(1, (seconds_left + 59) // 60)
+                return True, minutes_left
+
+    return False, 0
 
 
 @require_http_methods(["GET", "POST"])
@@ -54,38 +100,66 @@ def register(request):
 @csrf_protect
 def login_view(request):
     """
-    Handle user login.
-    
+    Handle user login with brute-force protection.
+
+    Protection model (hybrid account + IP):
+    - Every failed credential check records a LoginAttempt row.
+    - Before authenticating, both the submitted username and the client IP are
+      checked against the rolling LOCKOUT_WINDOW_MINUTES window.
+    - If either reaches MAX_LOGIN_ATTEMPTS failures the form is blocked and the
+      remaining cooldown is shown to the user.
+    - A successful login clears all LoginAttempt rows for that username so a
+      legitimate user is not penalised after recovering their password.
+
     GET: Display login form
-    POST: Authenticate user and create session
+    POST: Check lockout → authenticate → record failure or clear & redirect
     """
     if request.user.is_authenticated:
         return redirect('hirwafab:dashboard')
+
+    ip_address = _get_client_ip(request)
+    extra_context = {}
 
     if request.method == 'POST':
         form = LoginForm(request.POST)
         if form.is_valid():
             username = form.cleaned_data.get('username')
-            password = form.cleaned_data.get('password')
-            user = authenticate(request, username=username, password=password)
 
-            if user is not None:
-                login(request, user)
-                # Ensure user is in students group — handles accounts created
-                # before RBAC migration ran.
-                if not user.groups.exists():
-                    try:
-                        user.groups.add(Group.objects.get(name='students'))
-                    except Group.DoesNotExist:
-                        pass
-                messages.success(request, f'Welcome back, {user.username}!')
-                return redirect('hirwafab:dashboard')
+            # --- lockout gate ---
+            is_locked, minutes_remaining = _lockout_info(username, ip_address)
+            if is_locked:
+                noun = 'minute' if minutes_remaining == 1 else 'minutes'
+                messages.error(
+                    request,
+                    f'Too many failed login attempts. '
+                    f'Please try again in {minutes_remaining} {noun}.',
+                )
+                extra_context['locked_out'] = True
+                extra_context['minutes_remaining'] = minutes_remaining
             else:
-                messages.error(request, 'Invalid username or password.')
+                password = form.cleaned_data.get('password')
+                user = authenticate(request, username=username, password=password)
+
+                if user is not None:
+                    # Clear failure history on successful login
+                    LoginAttempt.objects.filter(username__iexact=username).delete()
+                    login(request, user)
+                    # Ensure user is in students group — handles accounts created
+                    # before RBAC migration ran.
+                    if not user.groups.exists():
+                        try:
+                            user.groups.add(Group.objects.get(name='students'))
+                        except Group.DoesNotExist:
+                            pass
+                    messages.success(request, f'Welcome back, {user.username}!')
+                    return redirect('hirwafab:dashboard')
+                else:
+                    LoginAttempt.objects.create(username=username, ip_address=ip_address)
+                    messages.error(request, 'Invalid username or password.')
     else:
         form = LoginForm()
 
-    context = {'form': form}
+    context = {'form': form, **extra_context}
     return render(request, 'hirwafab/login.html', context)
 
 

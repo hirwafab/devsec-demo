@@ -16,7 +16,14 @@
         </div>
     {% endif %}
 
-    <form method="post" novalidate>
+    {% if locked_out %}
+        <div class="alert alert-error" style="text-align:center; font-weight:bold;">
+            Account temporarily locked. Try again in {{ minutes_remaining }}
+            minute{% if minutes_remaining != 1 %}s{% endif %}.
+        </div>
+    {% endif %}
+
+    <form method="post" novalidate {% if locked_out %}style="opacity:0.5; pointer-events:none;"{% endif %}>
         {% csrf_token %}
 
         {% if form.non_field_errors %}

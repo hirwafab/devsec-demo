@@ -30,3 +30,26 @@ class UserProfile(models.Model):
 
     def __str__(self):
         return f"Profile for {self.user.username}"
+
+
+class LoginAttempt(models.Model):
+    """
+    Records each failed login attempt for brute-force protection.
+
+    Used by login_view to enforce per-account and per-IP rate limits.
+    Records are cleared for a username when that account logs in successfully,
+    and age out naturally after LOCKOUT_WINDOW_MINUTES via the timestamp filter.
+    """
+    username = models.CharField(max_length=150, db_index=True)
+    ip_address = models.GenericIPAddressField(db_index=True)
+    timestamp = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'hirwafab_login_attempt'
+        indexes = [
+            models.Index(fields=['username', 'timestamp']),
+            models.Index(fields=['ip_address', 'timestamp']),
+        ]
+
+    def __str__(self):
+        return f"Failed login for '{self.username}' from {self.ip_address} at {self.timestamp}"

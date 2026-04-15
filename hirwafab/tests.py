@@ -2,7 +2,10 @@ from django.test import TestCase, Client
 from django.urls import reverse
 from django.contrib.auth.models import User, Group, Permission
 from django.contrib.contenttypes.models import ContentType
-from .models import UserProfile
+from django.utils import timezone
+from datetime import timedelta
+from unittest.mock import patch
+from .models import UserProfile, LoginAttempt
 
 
 class UserRegistrationTests(TestCase):
@@ -757,3 +760,168 @@ class PasswordResetTests(TestCase):
         response = self.client.get(reverse('hirwafab:password_reset_complete'))
         self.assertEqual(response.status_code, 200)
         self.assertTemplateUsed(response, 'hirwafab/password_reset_complete.html')
+
+
+# ---------------------------------------------------------------------------
+# Brute-force / login-throttling tests
+# ---------------------------------------------------------------------------
+
+class BruteForceProtectionTests(TestCase):
+    """
+    Verify that the login endpoint resists brute-force attacks.
+
+    Design under test (hirwafab/views.py):
+    - MAX_LOGIN_ATTEMPTS = 5  failures within a LOCKOUT_WINDOW_MINUTES rolling window
+    - Lockout applies per-username and per-IP (hybrid)
+    - Successful login clears the failure history for that username
+    - Locked-out requests are rejected even with valid credentials
+    """
+
+    def setUp(self):
+        self.client = Client()
+        self.login_url = reverse('hirwafab:login')
+        self.user = User.objects.create_user(
+            username='brutetest',
+            password='GoodPass123!',
+        )
+        self.credentials = {'username': 'brutetest', 'password': 'GoodPass123!'}
+        self.bad_credentials = {'username': 'brutetest', 'password': 'WrongPass!'}
+
+    # --- helper -------------------------------------------------------
+
+    def _fail_login(self, n, ip='127.0.0.1', username='brutetest'):
+        """Submit n failed login attempts from the given IP."""
+        for _ in range(n):
+            self.client.post(
+                self.login_url,
+                {'username': username, 'password': 'WrongPass!'},
+                REMOTE_ADDR=ip,
+            )
+
+    # --- normal-path tests --------------------------------------------
+
+    def test_valid_login_succeeds(self):
+        """Baseline: correct credentials produce a redirect to dashboard."""
+        response = self.client.post(self.login_url, self.credentials)
+        self.assertRedirects(response, reverse('hirwafab:dashboard'))
+
+    def test_invalid_login_returns_200_with_error(self):
+        """Incorrect credentials show the login page again with an error message."""
+        response = self.client.post(self.login_url, self.bad_credentials)
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, 'hirwafab/login.html')
+        messages = [str(m) for m in response.context['messages']]
+        self.assertTrue(any('Invalid' in m for m in messages))
+
+    # --- attempt-tracking tests ---------------------------------------
+
+    def test_failed_login_creates_login_attempt_record(self):
+        """Each failed attempt is persisted as a LoginAttempt row."""
+        self.client.post(self.login_url, self.bad_credentials, REMOTE_ADDR='127.0.0.1')
+        self.assertEqual(LoginAttempt.objects.filter(username='brutetest').count(), 1)
+
+    def test_successful_login_clears_attempt_records(self):
+        """Successful login deletes the failure history for that username."""
+        self._fail_login(3)
+        self.assertEqual(LoginAttempt.objects.filter(username='brutetest').count(), 3)
+        self.client.post(self.login_url, self.credentials, REMOTE_ADDR='127.0.0.1')
+        self.assertEqual(LoginAttempt.objects.filter(username='brutetest').count(), 0)
+
+    def test_failed_logins_below_threshold_do_not_lock(self):
+        """Four failures (one below threshold) must not trigger a lockout."""
+        self._fail_login(4)
+        response = self.client.post(self.login_url, self.credentials)
+        self.assertRedirects(response, reverse('hirwafab:dashboard'))
+
+    # --- lockout trigger tests ----------------------------------------
+
+    def test_lockout_triggers_after_max_attempts(self):
+        """Five failures lock the account; the 6th attempt is blocked."""
+        self._fail_login(5)
+        response = self.client.post(self.login_url, self.bad_credentials, REMOTE_ADDR='127.0.0.1')
+        self.assertEqual(response.status_code, 200)
+        messages_list = [str(m) for m in response.context['messages']]
+        self.assertTrue(any('Too many' in m for m in messages_list))
+
+    def test_lockout_blocks_valid_credentials(self):
+        """Even correct credentials are refused while the account is locked."""
+        self._fail_login(5)
+        response = self.client.post(self.login_url, self.credentials, REMOTE_ADDR='127.0.0.1')
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.wsgi_request.user.is_authenticated)
+
+    def test_lockout_context_passed_to_template(self):
+        """Template receives locked_out=True and a positive minutes_remaining."""
+        self._fail_login(5)
+        response = self.client.post(self.login_url, self.bad_credentials, REMOTE_ADDR='127.0.0.1')
+        self.assertTrue(response.context.get('locked_out'))
+        self.assertGreater(response.context.get('minutes_remaining', 0), 0)
+
+    def test_lockout_message_shown_in_template(self):
+        """The login page renders the lockout alert block when locked."""
+        self._fail_login(5)
+        response = self.client.post(self.login_url, self.bad_credentials, REMOTE_ADDR='127.0.0.1')
+        self.assertContains(response, 'Too many failed login attempts')
+
+    # --- IP-based lockout tests ---------------------------------------
+
+    def test_ip_lockout_triggers_for_different_usernames(self):
+        """
+        Five failures from the same IP across different usernames still triggers
+        the IP-based lockout for that IP.
+        """
+        for i in range(5):
+            self.client.post(
+                self.login_url,
+                {'username': f'nonexistent_{i}', 'password': 'Wrong!'},
+                REMOTE_ADDR='10.0.0.1',
+            )
+        # Now try any username from same IP — should be locked by IP
+        response = self.client.post(
+            self.login_url,
+            {'username': 'nonexistent_99', 'password': 'Wrong!'},
+            REMOTE_ADDR='10.0.0.1',
+        )
+        messages_list = [str(m) for m in response.context['messages']]
+        self.assertTrue(any('Too many' in m for m in messages_list))
+
+    def test_different_ip_not_affected_by_other_ip_lockout(self):
+        """
+        IP-level lockout on 192.168.1.1 must not block 192.168.1.2.
+        Uses nonexistent usernames so no account-level lockout is triggered
+        for 'brutetest', isolating the IP-only dimension of the check.
+        """
+        for i in range(5):
+            self.client.post(
+                self.login_url,
+                {'username': f'ghost_{i}', 'password': 'Wrong!'},
+                REMOTE_ADDR='192.168.1.1',
+            )
+        # Different IP with valid credentials → should succeed
+        response = self.client.post(self.login_url, self.credentials, REMOTE_ADDR='192.168.1.2')
+        self.assertRedirects(response, reverse('hirwafab:dashboard'))
+
+    # --- lockout expiry tests -----------------------------------------
+
+    def test_lockout_expires_after_window(self):
+        """
+        Failures older than LOCKOUT_WINDOW_MINUTES no longer count, so an
+        otherwise-locked account can log in once the window has passed.
+        """
+        from hirwafab.views import LOCKOUT_WINDOW_MINUTES
+
+        # Backdated attempts — already outside the window
+        old_time = timezone.now() - timedelta(minutes=LOCKOUT_WINDOW_MINUTES + 1)
+        for _ in range(5):
+            LoginAttempt.objects.create(
+                username='brutetest',
+                ip_address='127.0.0.1',
+                timestamp=old_time,
+            )
+
+        # Manually set timestamp (auto_now_add prevents it at create time)
+        LoginAttempt.objects.filter(username='brutetest').update(timestamp=old_time)
+
+        # Window has fully elapsed → login should succeed
+        response = self.client.post(self.login_url, self.credentials, REMOTE_ADDR='127.0.0.1')
+        self.assertRedirects(response, reverse('hirwafab:dashboard'))

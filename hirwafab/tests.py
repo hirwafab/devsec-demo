@@ -1,3 +1,5 @@
+import json
+
 from django.test import TestCase, Client
 from django.urls import reverse
 from django.contrib.auth.models import User, Group, Permission
@@ -925,3 +927,95 @@ class BruteForceProtectionTests(TestCase):
         # Window has fully elapsed → login should succeed
         response = self.client.post(self.login_url, self.credentials, REMOTE_ADDR='127.0.0.1')
         self.assertRedirects(response, reverse('hirwafab:dashboard'))
+
+
+# ---------------------------------------------------------------------------
+# CSRF protection tests for the AJAX bio-update endpoint
+# ---------------------------------------------------------------------------
+
+class CSRFBioUpdateTests(TestCase):
+    """
+    Verify that the AJAX bio-update endpoint enforces CSRF protection.
+
+    Django's test Client sends CSRF tokens by default. To test that a request
+    WITHOUT a token is rejected, we use enforce_csrf_checks=True when creating
+    the client so the middleware behaves exactly as it does in production.
+    """
+
+    def setUp(self):
+        self.url = reverse('hirwafab:ajax_bio_update')
+        self.user = User.objects.create_user(username='csrftest', password='Pass1234!')
+        UserProfile.objects.get_or_create(user=self.user)
+        # Authenticated client with CSRF checks enforced (production behaviour)
+        self.csrf_client = Client(enforce_csrf_checks=True)
+        self.csrf_client.login(username='csrftest', password='Pass1234!')
+        # Authenticated client with CSRF checks disabled (token always valid)
+        self.safe_client = Client()
+        self.safe_client.login(username='csrftest', password='Pass1234!')
+
+    def _post(self, client, bio='Hello', token=None):
+        headers = {'content_type': 'application/json'}
+        if token:
+            headers['HTTP_X_CSRFTOKEN'] = token
+        return client.post(
+            self.url,
+            data=json.dumps({'bio': bio}),
+            **headers,
+        )
+
+    # --- CSRF enforcement -------------------------------------------------
+
+    def test_post_without_csrf_token_returns_403(self):
+        """A POST with no X-CSRFToken header must be rejected with 403."""
+        response = self._post(self.csrf_client)
+        self.assertEqual(response.status_code, 403)
+
+    def test_post_with_wrong_csrf_token_returns_403(self):
+        """A POST with an invalid token must be rejected with 403."""
+        response = self._post(self.csrf_client, token='completelywrong')
+        self.assertEqual(response.status_code, 403)
+
+    def test_post_with_valid_csrf_token_returns_200(self):
+        """A POST that includes the correct X-CSRFToken header must succeed."""
+        # GET the logout confirm page — requires only login, renders
+        # {% csrf_token %}, which causes CsrfViewMiddleware to set the cookie.
+        get_resp = self.csrf_client.get(reverse('hirwafab:logout'))
+        self.assertEqual(get_resp.status_code, 200)
+        token = self.csrf_client.cookies.get('csrftoken')
+        self.assertIsNotNone(token, 'CSRF cookie was not set by middleware')
+        response = self._post(self.csrf_client, token=token.value)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['status'], 'ok')
+
+    # --- authentication gate ----------------------------------------------
+
+    def test_unauthenticated_request_redirects(self):
+        """An unauthenticated request must be redirected to login, not served."""
+        anon = Client(enforce_csrf_checks=True)
+        response = anon.post(
+            self.url,
+            data=json.dumps({'bio': 'hack'}),
+            content_type='application/json',
+        )
+        self.assertIn(response.status_code, [302, 403])
+
+    def test_get_request_rejected(self):
+        """GET is not an allowed method on this endpoint."""
+        response = self.safe_client.get(self.url)
+        self.assertEqual(response.status_code, 405)
+
+    # --- functional correctness -------------------------------------------
+
+    def test_bio_is_saved_on_valid_request(self):
+        """The bio field is actually persisted when the request is valid."""
+        response = self._post(self.safe_client, bio='My updated bio')
+        self.assertEqual(response.status_code, 200)
+        self.user.profile.refresh_from_db()
+        self.assertEqual(self.user.profile.bio, 'My updated bio')
+
+    def test_bio_is_truncated_to_500_chars(self):
+        """Input longer than 500 characters is silently truncated."""
+        long_bio = 'x' * 600
+        self._post(self.safe_client, bio=long_bio)
+        self.user.profile.refresh_from_db()
+        self.assertEqual(len(self.user.profile.bio), 500)

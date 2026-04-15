@@ -9,7 +9,7 @@ from django.contrib import messages
 from django.http import JsonResponse
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods
-from django.views.decorators.csrf import csrf_protect, csrf_exempt
+from django.views.decorators.csrf import csrf_protect
 from django.core.exceptions import PermissionDenied
 from django.db.models import Q
 from .forms import RegistrationForm, LoginForm, PasswordChangeForm, UserProfileForm
@@ -387,21 +387,19 @@ def reports(request):
 
 
 # ---------------------------------------------------------------------------
-# AJAX bio update — INSECURE: csrf_exempt disables token validation entirely.
-# Any website can silently POST to this endpoint on behalf of a logged-in user.
+# AJAX bio update — CSRF protection enforced by CsrfViewMiddleware.
+# Client must supply the X-CSRFToken header; requests without it get 403.
 # ---------------------------------------------------------------------------
 
-@csrf_exempt
 @login_required(login_url='hirwafab:login')
 @require_http_methods(["POST"])
 def ajax_bio_update(request):
     """
     AJAX endpoint to update the authenticated user's bio.
 
-    WARNING: @csrf_exempt here means the CSRF middleware is bypassed.
-    A malicious third-party page can craft a POST to this URL and the browser
-    will include the session cookie automatically, causing the victim's bio to
-    be overwritten without their knowledge.
+    CSRF protection is provided by CsrfViewMiddleware (active in settings).
+    The calling JavaScript reads the token from the DOM and sends it as the
+    X-CSRFToken request header. Requests that omit the token receive 403.
     """
     try:
         data = json.loads(request.body)

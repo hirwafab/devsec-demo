@@ -129,17 +129,18 @@
 
 {% block extra_js %}
 <script>
-// INSECURE: No CSRF token sent with this request.
-// An attacker on another origin can POST to this endpoint and the browser
-// will include the session cookie, overwriting the victim's bio silently.
+// Read the CSRF token from the hidden input rendered by {% csrf_token %}.
+// Django's CsrfViewMiddleware validates this token on every state-changing
+// request; omitting it results in a 403 Forbidden response.
 document.getElementById('quick-save-bio').addEventListener('click', function () {
     var bio = document.getElementById('bio-field').value;
     var status = document.getElementById('quick-save-status');
+    var csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
     fetch("{% url 'hirwafab:ajax_bio_update' %}", {
         method: 'POST',
         headers: {
-            'Content-Type': 'application/json'
-            // Missing: 'X-CSRFToken' header — CSRF protection is not enforced
+            'Content-Type': 'application/json',
+            'X-CSRFToken': csrfToken
         },
         body: JSON.stringify({ bio: bio })
     })

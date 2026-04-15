@@ -141,3 +141,37 @@ DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'noreply@hirwafab.loca
 
 # Password reset token expires after 1 day (86400 seconds)
 PASSWORD_RESET_TIMEOUT = 86400
+
+# ---------------------------------------------------------------------------
+# Audit logging
+# ---------------------------------------------------------------------------
+# A dedicated hirwafab.audit logger records security-relevant events.
+# It is separate from Django's own loggers so audit output can be routed,
+# filtered, or shipped independently in production.
+#
+# What is logged:   event type, username, IP address, outcome
+# What is NOT logged: passwords, tokens, session keys, raw form values
+# ---------------------------------------------------------------------------
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'audit': {
+            'format': '[AUDIT] %(asctime)s %(levelname)s %(message)s',
+            'datefmt': '%Y-%m-%dT%H:%M:%SZ',
+        },
+    },
+    'handlers': {
+        'audit_console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'audit',
+        },
+    },
+    'loggers': {
+        'hirwafab.audit': {
+            'handlers': ['audit_console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+    },
+}

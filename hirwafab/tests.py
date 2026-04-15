@@ -1124,3 +1124,150 @@ class OpenRedirectTests(TestCase):
         self.assertRedirects(
             response, reverse('hirwafab:login'), fetch_redirect_response=False
         )
+
+
+# ---------------------------------------------------------------------------
+# Audit logging tests
+# ---------------------------------------------------------------------------
+
+class AuditLoggingTests(TestCase):
+    """
+    Verify that security-relevant events are recorded by the hirwafab.audit
+    logger and that sensitive values never appear in the log output.
+
+    Uses assertLogs() to capture records emitted during each action so the
+    tests are independent of any external log handler configuration.
+    """
+
+    LOGGER = 'hirwafab.audit'
+
+    def setUp(self):
+        self.client = Client()
+        self.user = User.objects.create_user(
+            username='audituser',
+            password='AuditPass123!',
+        )
+        UserProfile.objects.get_or_create(user=self.user)
+        try:
+            self.user.groups.add(Group.objects.get(name='students'))
+        except Group.DoesNotExist:
+            pass
+
+    # --- registration -----------------------------------------------------
+
+    def test_registration_is_logged(self):
+        """Successful registration emits a REGISTRATION audit record."""
+        with self.assertLogs(self.LOGGER, level='INFO') as log:
+            self.client.post(reverse('hirwafab:register'), {
+                'username': 'newaudituser',
+                'email': 'new@audit.test',
+                'password1': 'StrongPass99!',
+                'password2': 'StrongPass99!',
+            })
+        self.assertTrue(any('REGISTRATION' in m for m in log.output))
+        self.assertTrue(any('newaudituser' in m for m in log.output))
+
+    # --- login ------------------------------------------------------------
+
+    def test_login_success_is_logged(self):
+        """Successful login emits a LOGIN_SUCCESS audit record."""
+        with self.assertLogs(self.LOGGER, level='INFO') as log:
+            self.client.post(reverse('hirwafab:login'), {
+                'username': 'audituser',
+                'password': 'AuditPass123!',
+            })
+        self.assertTrue(any('LOGIN_SUCCESS' in m for m in log.output))
+        self.assertTrue(any('audituser' in m for m in log.output))
+
+    def test_login_failure_is_logged(self):
+        """Failed login attempt emits a LOGIN_FAILURE audit record."""
+        with self.assertLogs(self.LOGGER, level='WARNING') as log:
+            self.client.post(reverse('hirwafab:login'), {
+                'username': 'audituser',
+                'password': 'WrongPassword!',
+            })
+        self.assertTrue(any('LOGIN_FAILURE' in m for m in log.output))
+        self.assertTrue(any('audituser' in m for m in log.output))
+
+    def test_login_lockout_is_logged(self):
+        """Account lockout emits a LOGIN_LOCKOUT warning record."""
+        from hirwafab.views import MAX_LOGIN_ATTEMPTS
+        with self.assertLogs(self.LOGGER, level='WARNING') as log:
+            for _ in range(MAX_LOGIN_ATTEMPTS):
+                self.client.post(reverse('hirwafab:login'), {
+                    'username': 'audituser',
+                    'password': 'WrongPassword!',
+                })
+            # This attempt triggers the lockout message
+            self.client.post(reverse('hirwafab:login'), {
+                'username': 'audituser',
+                'password': 'WrongPassword!',
+            })
+        self.assertTrue(any('LOGIN_LOCKOUT' in m for m in log.output))
+
+    # --- logout -----------------------------------------------------------
+
+    def test_logout_is_logged(self):
+        """Logout emits a LOGOUT audit record."""
+        self.client.login(username='audituser', password='AuditPass123!')
+        with self.assertLogs(self.LOGGER, level='INFO') as log:
+            self.client.post(reverse('hirwafab:logout'))
+        self.assertTrue(any('LOGOUT' in m for m in log.output))
+        self.assertTrue(any('audituser' in m for m in log.output))
+
+    # --- password change --------------------------------------------------
+
+    def test_password_change_is_logged(self):
+        """Successful password change emits a PASSWORD_CHANGE audit record."""
+        self.client.login(username='audituser', password='AuditPass123!')
+        with self.assertLogs(self.LOGGER, level='INFO') as log:
+            self.client.post(reverse('hirwafab:change_password'), {
+                'old_password': 'AuditPass123!',
+                'new_password1': 'NewAuditPass99!',
+                'new_password2': 'NewAuditPass99!',
+            })
+        self.assertTrue(any('PASSWORD_CHANGE' in m for m in log.output))
+        self.assertTrue(any('audituser' in m for m in log.output))
+
+    # --- profile update ---------------------------------------------------
+
+    def test_profile_update_is_logged(self):
+        """Successful profile update emits a PROFILE_UPDATE audit record."""
+        self.client.login(username='audituser', password='AuditPass123!')
+        with self.assertLogs(self.LOGGER, level='INFO') as log:
+            self.client.post(reverse('hirwafab:profile'), {
+                'first_name': 'Audit',
+                'last_name': 'User',
+                'email': 'audituser@test.com',
+                'bio': 'Updated bio',
+            })
+        self.assertTrue(any('PROFILE_UPDATE' in m for m in log.output))
+        self.assertTrue(any('audituser' in m for m in log.output))
+
+    # --- secrets never logged ---------------------------------------------
+
+    def test_password_never_appears_in_login_failure_log(self):
+        """The submitted password must never appear in any audit log record."""
+        secret_password = 'SuperSecretPass999!'
+        with self.assertLogs(self.LOGGER, level='WARNING') as log:
+            self.client.post(reverse('hirwafab:login'), {
+                'username': 'audituser',
+                'password': secret_password,
+            })
+        combined = ' '.join(log.output)
+        self.assertNotIn(secret_password, combined)
+
+    def test_password_never_appears_in_password_change_log(self):
+        """Old and new passwords must never appear in any audit log record."""
+        self.client.login(username='audituser', password='AuditPass123!')
+        old_pass = 'AuditPass123!'
+        new_pass = 'BrandNewPass99!'
+        with self.assertLogs(self.LOGGER, level='INFO') as log:
+            self.client.post(reverse('hirwafab:change_password'), {
+                'old_password': old_pass,
+                'new_password1': new_pass,
+                'new_password2': new_pass,
+            })
+        combined = ' '.join(log.output)
+        self.assertNotIn(old_pass, combined)
+        self.assertNotIn(new_pass, combined)

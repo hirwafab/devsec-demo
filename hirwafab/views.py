@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import timedelta
 
 from django.shortcuts import render, redirect, get_object_or_404
@@ -15,6 +16,11 @@ from django.core.exceptions import PermissionDenied
 from django.db.models import Q
 from .forms import RegistrationForm, LoginForm, PasswordChangeForm, UserProfileForm
 from .models import UserProfile, LoginAttempt
+
+# Dedicated audit logger — routes to hirwafab.audit in settings.LOGGING.
+# Records security-relevant events without logging sensitive values such as
+# passwords, tokens, or raw form input.
+audit_log = logging.getLogger('hirwafab.audit')
 
 # ---------------------------------------------------------------------------
 # Brute-force protection constants
@@ -105,6 +111,10 @@ def register(request):
             except Group.DoesNotExist:
                 pass  # Group will be created via management command
             
+            audit_log.info(
+                'event=REGISTRATION username=%s ip=%s',
+                user.username, _get_client_ip(request),
+            )
             messages.success(
                 request,
                 f'Account created successfully! Welcome {user.username}. You can now log in.'
@@ -157,6 +167,10 @@ def login_view(request):
             is_locked, minutes_remaining = _lockout_info(username, ip_address)
             if is_locked:
                 noun = 'minute' if minutes_remaining == 1 else 'minutes'
+                audit_log.warning(
+                    'event=LOGIN_LOCKOUT username=%s ip=%s minutes_remaining=%d',
+                    username, ip_address, minutes_remaining,
+                )
                 messages.error(
                     request,
                     f'Too many failed login attempts. '
@@ -179,10 +193,18 @@ def login_view(request):
                             user.groups.add(Group.objects.get(name='students'))
                         except Group.DoesNotExist:
                             pass
+                    audit_log.info(
+                        'event=LOGIN_SUCCESS username=%s ip=%s',
+                        username, ip_address,
+                    )
                     messages.success(request, f'Welcome back, {user.username}!')
                     return redirect(next_url)
                 else:
                     LoginAttempt.objects.create(username=username, ip_address=ip_address)
+                    audit_log.warning(
+                        'event=LOGIN_FAILURE username=%s ip=%s',
+                        username, ip_address,
+                    )
                     messages.error(request, 'Invalid username or password.')
     else:
         form = LoginForm()
@@ -200,6 +222,10 @@ def logout_view(request):
     """
     if request.method == 'POST':
         next_url = _safe_next_url(request, fallback='hirwafab:login')
+        audit_log.info(
+            'event=LOGOUT username=%s ip=%s',
+            request.user.username, _get_client_ip(request),
+        )
         logout(request)
         messages.success(request, 'You have been logged out successfully.')
         return redirect(next_url)
@@ -247,6 +273,10 @@ def change_password(request):
         form = PasswordChangeForm(request.user, request.POST)
         if form.is_valid():
             user = form.save()
+            audit_log.info(
+                'event=PASSWORD_CHANGE username=%s ip=%s',
+                request.user.username, _get_client_ip(request),
+            )
             messages.success(request, 'Your password has been changed successfully.')
             return redirect('hirwafab:dashboard')
         else:
@@ -286,6 +316,10 @@ def profile(request):
         form = UserProfileForm(request.POST, request.FILES, instance=user_profile)
         if form.is_valid():
             form.save()
+            audit_log.info(
+                'event=PROFILE_UPDATE username=%s ip=%s',
+                request.user.username, _get_client_ip(request),
+            )
             messages.success(request, 'Your profile has been updated successfully.')
             return redirect('hirwafab:dashboard')
         else:

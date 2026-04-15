@@ -1,3 +1,4 @@
+import json
 from datetime import timedelta
 
 from django.shortcuts import render, redirect, get_object_or_404
@@ -5,9 +6,10 @@ from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.decorators import login_required, permission_required
 from django.contrib.auth.models import Group
 from django.contrib import messages
+from django.http import JsonResponse
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods
-from django.views.decorators.csrf import csrf_protect
+from django.views.decorators.csrf import csrf_protect, csrf_exempt
 from django.core.exceptions import PermissionDenied
 from django.db.models import Q
 from .forms import RegistrationForm, LoginForm, PasswordChangeForm, UserProfileForm
@@ -382,3 +384,31 @@ def reports(request):
         'user_data': user_data,
     }
     return render(request, 'hirwafab/reports.html', context)
+
+
+# ---------------------------------------------------------------------------
+# AJAX bio update — INSECURE: csrf_exempt disables token validation entirely.
+# Any website can silently POST to this endpoint on behalf of a logged-in user.
+# ---------------------------------------------------------------------------
+
+@csrf_exempt
+@login_required(login_url='hirwafab:login')
+@require_http_methods(["POST"])
+def ajax_bio_update(request):
+    """
+    AJAX endpoint to update the authenticated user's bio.
+
+    WARNING: @csrf_exempt here means the CSRF middleware is bypassed.
+    A malicious third-party page can craft a POST to this URL and the browser
+    will include the session cookie automatically, causing the victim's bio to
+    be overwritten without their knowledge.
+    """
+    try:
+        data = json.loads(request.body)
+        bio = data.get('bio', '').strip()[:500]
+        profile = request.user.profile
+        profile.bio = bio
+        profile.save(update_fields=['bio', 'updated_at'])
+        return JsonResponse({'status': 'ok', 'bio': bio})
+    except Exception:
+        return JsonResponse({'status': 'error', 'message': 'Invalid request'}, status=400)

@@ -10,6 +10,9 @@ urlpatterns = [
     path('login/', views.login_view, name='login'),
     path('logout/', views.logout_view, name='logout'),
 
+    # AJAX endpoints
+    path('ajax/bio-update/', views.ajax_bio_update, name='ajax_bio_update'),
+
     # Student/Authenticated User URLs
     path('dashboard/', views.dashboard, name='dashboard'),
     path('profile/', views.profile, name='profile'),

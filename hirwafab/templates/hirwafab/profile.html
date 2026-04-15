@@ -82,7 +82,7 @@
 
             <div class="form-group">
                 {{ form.bio.label_tag }}
-                <textarea name="bio" class="form-control" rows="5" placeholder="Tell us about yourself...">{{ profile.bio }}</textarea>
+                <textarea id="bio-field" name="bio" class="form-control" rows="5" placeholder="Tell us about yourself...">{{ profile.bio }}</textarea>
                 {% if form.bio.errors %}
                     <ul class="errorlist">
                         {% for error in form.bio.errors %}
@@ -91,6 +91,8 @@
                     </ul>
                 {% endif %}
                 <span class="help-text">Maximum 500 characters</span>
+                <button type="button" id="quick-save-bio" class="btn btn-secondary" style="margin-top:8px;">Quick Save Bio</button>
+                <span id="quick-save-status" style="margin-left:10px; font-size:13px;"></span>
             </div>
 
             <div class="form-group">
@@ -123,4 +125,29 @@
         </form>
     </div>
 </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// INSECURE: No CSRF token sent with this request.
+// An attacker on another origin can POST to this endpoint and the browser
+// will include the session cookie, overwriting the victim's bio silently.
+document.getElementById('quick-save-bio').addEventListener('click', function () {
+    var bio = document.getElementById('bio-field').value;
+    var status = document.getElementById('quick-save-status');
+    fetch("{% url 'hirwafab:ajax_bio_update' %}", {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+            // Missing: 'X-CSRFToken' header — CSRF protection is not enforced
+        },
+        body: JSON.stringify({ bio: bio })
+    })
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+        status.textContent = data.status === 'ok' ? 'Saved.' : 'Error.';
+    })
+    .catch(function () { status.textContent = 'Request failed.'; });
+});
+</script>
 {% endblock %}

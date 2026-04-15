@@ -122,6 +122,11 @@ def login_view(request):
     ip_address = _get_client_ip(request)
     extra_context = {}
 
+    # INSECURE: accept next from GET or POST with no validation.
+    # An attacker can craft a link like /login/?next=https://evil.com and the
+    # victim will be silently forwarded to an external site after logging in.
+    next_url = request.POST.get('next', request.GET.get('next', ''))
+
     if request.method == 'POST':
         form = LoginForm(request.POST)
         if form.is_valid():
@@ -154,14 +159,15 @@ def login_view(request):
                         except Group.DoesNotExist:
                             pass
                     messages.success(request, f'Welcome back, {user.username}!')
-                    return redirect('hirwafab:dashboard')
+                    # INSECURE: redirect to next_url without any validation
+                    return redirect(next_url or 'hirwafab:dashboard')
                 else:
                     LoginAttempt.objects.create(username=username, ip_address=ip_address)
                     messages.error(request, 'Invalid username or password.')
     else:
         form = LoginForm()
 
-    context = {'form': form, **extra_context}
+    context = {'form': form, 'next': next_url, **extra_context}
     return render(request, 'hirwafab/login.html', context)
 
 
@@ -173,9 +179,12 @@ def logout_view(request):
     Clears the user session and redirects to login page.
     """
     if request.method == 'POST':
+        # INSECURE: accept next from POST with no validation.
+        next_url = request.POST.get('next', '')
         logout(request)
         messages.success(request, 'You have been logged out successfully.')
-        return redirect('hirwafab:login')
+        # INSECURE: redirect to next_url without any validation
+        return redirect(next_url or 'hirwafab:login')
 
     return render(request, 'hirwafab/logout_confirm.html')
 

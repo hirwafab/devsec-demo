@@ -26,7 +26,10 @@
         {% if profile.bio %}
         <div class="info-section">
             <h3>Bio</h3>
-            <p>{{ profile.bio }}</p>
+            {# INSECURE: |safe bypasses Django's auto-escaping. A stored XSS
+               payload in a student's bio executes in the instructor's browser
+               when they view the profile. #}
+            <p>{{ profile.bio|safe }}</p>
         </div>
         {% endif %}
 
